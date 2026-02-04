@@ -152,5 +152,26 @@
     "user_agent": "Streamlit App",
     "timestamp": "2025-10-19T11:20:39.148142-03:00",
     "data_hora": "19/10/2025 11:20:39"
+  },
+  {
+    "usuario": "ALEXANDRE PEREIRA TOLENTINO",
+    "ip": "179.124.132.218",
+    "user_agent": "Streamlit App",
+    "timestamp": "2026-01-21T15:15:11.844727-03:00",
+    "data_hora": "21/01/2026 15:15:11"
+  },
+  {
+    "usuario": "ALEXANDRE PEREIRA TOLENTINO (LOGOUT)",
+    "ip": "179.124.132.218",
+    "user_agent": "Streamlit App",
+    "timestamp": "2026-01-21T15:15:16.822951-03:00",
+    "data_hora": "21/01/2026 15:15:16"
+  },
+  {
+    "usuario": "ALEXANDRE PEREIRA TOLENTINO",
+    "ip": "179.124.132.218",
+    "user_agent": "Streamlit App",
+    "timestamp": "2026-01-21T15:15:34.297806-03:00",
+    "data_hora": "21/01/2026 15:15:34"
   }
 ]

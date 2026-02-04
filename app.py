@@ -92,6 +92,8 @@ def autenticar_usuario(identificador, senha):
     
     # Normalizar identificador (remover pontos, traços, espaços)
     id_limpo = re.sub(r'[^0-9]', '', str(identificador))
+    # Normalizar senha (remover pontos, traços, espaços - apenas números)
+    senha_limpa = re.sub(r'[^0-9]', '', str(senha))
     
     # Buscar usuário na planilha
     for _, usuario in df_usuarios.iterrows():
@@ -108,8 +110,9 @@ def autenticar_usuario(identificador, senha):
         
         # Comparar com CPF ou INEP
         if (cpf_usuario and cpf_usuario == id_limpo) or (inep_usuario and inep_usuario == id_limpo):
-            # Verificar senha (comparação direta)
-            if str(usuario.get('SENHA', '')) == str(senha):
+            # Verificar senha (comparação com senha limpa - apenas números)
+            senha_usuario = re.sub(r'[^0-9]', '', str(usuario.get('SENHA', '')))
+            if senha_usuario == senha_limpa:
                 # Registrar acesso apenas no momento do login
                 if MONITORING_AVAILABLE:
                     try:
@@ -140,6 +143,9 @@ def alterar_senha(identificador, senha_atual, nova_senha):
             return False, "Erro ao carregar planilha"
         
         id_limpo = re.sub(r'[^0-9]', '', str(identificador))
+        # Normalizar senhas (remover pontos, traços, espaços - apenas números)
+        senha_atual_limpa = re.sub(r'[^0-9]', '', str(senha_atual))
+        nova_senha_limpa = re.sub(r'[^0-9]', '', str(nova_senha))
         
         # Encontrar usuário
         for idx, usuario in df_usuarios.iterrows():
@@ -156,9 +162,10 @@ def alterar_senha(identificador, senha_atual, nova_senha):
             
             # Comparar com CPF ou INEP
             if (cpf_usuario and cpf_usuario == id_limpo) or (inep_usuario and inep_usuario == id_limpo):
-                if str(usuario.get('SENHA', '')) == str(senha_atual):
-                    # Atualizar senha
-                    df_usuarios.at[idx, 'SENHA'] = nova_senha
+                senha_usuario = re.sub(r'[^0-9]', '', str(usuario.get('SENHA', '')))
+                if senha_usuario == senha_atual_limpa:
+                    # Atualizar senha (salvar apenas números)
+                    df_usuarios.at[idx, 'SENHA'] = nova_senha_limpa
                     
                     # Salvar planilha
                     df_usuarios.to_excel("login_senha.xlsx", index=False)
@@ -380,8 +387,8 @@ def tela_login():
         st.info("Aceita CPF (pessoas) ou INEP (escolas)")
         
         with st.form("login_form"):
-            identificador = st.text_input("CPF ou INEP:", placeholder="Digite seu CPF ou INEP da escola", help="Digite apenas números")
-            senha = st.text_input("Senha:", type="password", placeholder="Digite sua senha")
+            identificador = st.text_input("CPF ou INEP:", placeholder="Digite seu CPF ou INEP da escola", help="Digite apenas números (pontos e traços serão removidos automaticamente)")
+            senha = st.text_input("Senha:", type="password", placeholder="Digite sua senha", help="Digite apenas números (pontos e traços serão removidos automaticamente)")
             
             col_btn1, col_btn2 = st.columns(2)
             with col_btn1:
@@ -391,12 +398,16 @@ def tela_login():
                     st.rerun()
         
         if login_btn:
-            if not identificador or not senha:
+            # Limpar identificador e senha (remover pontos, traços, espaços - apenas números)
+            identificador_limpo = re.sub(r'[^0-9]', '', str(identificador))
+            senha_limpa = re.sub(r'[^0-9]', '', str(senha))
+            
+            if not identificador_limpo or not senha_limpa:
                 st.error("Por favor, preencha todos os campos!")
-            elif len(re.sub(r'[^0-9]', '', identificador)) < 8:
+            elif len(identificador_limpo) < 8:
                 st.error("CPF/INEP inválido! Digite pelo menos 8 números.")
             else:
-                usuario = autenticar_usuario(identificador, senha)
+                usuario = autenticar_usuario(identificador_limpo, senha_limpa)
                 if usuario:
                     st.session_state.logado = True
                     st.session_state.usuario = usuario
@@ -505,9 +516,9 @@ def tela_alterar_senha():
         st.markdown("### Alterar sua senha")
         
         with st.form("alterar_senha_form"):
-            senha_atual = st.text_input("Senha atual:", type="password")
-            nova_senha = st.text_input("Nova senha:", type="password")
-            confirmar_senha = st.text_input("Confirmar nova senha:", type="password")
+            senha_atual = st.text_input("Senha atual:", type="password", help="Digite apenas números (pontos e traços serão removidos automaticamente)")
+            nova_senha = st.text_input("Nova senha:", type="password", help="Digite apenas números (pontos e traços serão removidos automaticamente)")
+            confirmar_senha = st.text_input("Confirmar nova senha:", type="password", help="Digite apenas números (pontos e traços serão removidos automaticamente)")
             
             col_btn1, col_btn2 = st.columns(2)
             with col_btn1:
@@ -518,19 +529,24 @@ def tela_alterar_senha():
                     st.rerun()
         
         if alterar_btn:
-            if not senha_atual or not nova_senha or not confirmar_senha:
+            # Limpar senhas (remover pontos, traços, espaços - apenas números)
+            senha_atual_limpa = re.sub(r'[^0-9]', '', str(senha_atual))
+            nova_senha_limpa = re.sub(r'[^0-9]', '', str(nova_senha))
+            confirmar_senha_limpa = re.sub(r'[^0-9]', '', str(confirmar_senha))
+            
+            if not senha_atual_limpa or not nova_senha_limpa or not confirmar_senha_limpa:
                 st.error("Por favor, preencha todos os campos!")
-            elif nova_senha != confirmar_senha:
+            elif nova_senha_limpa != confirmar_senha_limpa:
                 st.error("As senhas não coincidem!")
-            elif len(nova_senha) < 4:
+            elif len(nova_senha_limpa) < 4:
                 st.error("A nova senha deve ter pelo menos 4 caracteres!")
             else:
                 # Usar CPF ou INEP dependendo do que estiver disponível
                 identificador = st.session_state.usuario.get('cpf') or st.session_state.usuario.get('inep')
                 sucesso, mensagem = alterar_senha(
                     identificador, 
-                    senha_atual, 
-                    nova_senha
+                    senha_atual_limpa, 
+                    nova_senha_limpa
                 )
                 if sucesso:
                     st.success(mensagem)
