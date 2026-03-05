@@ -8,8 +8,10 @@ from openpyxl.styles import PatternFill, Font, Alignment
 from openpyxl.utils.dataframe import dataframe_to_rows
 import hashlib
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
+import json
+import random
 
 # Carregar variáveis de ambiente
 try:
@@ -48,8 +50,144 @@ except ImportError:
     MONITORING_AVAILABLE = False
 
 # -----------------------------
-# Sistema de Autenticação
+# Sistema de Autenticação (login por código enviado por e-mail)
 # -----------------------------
+CODIGOS_LOGIN_FILE = "codigos_login.json"
+CODIGO_VALIDADE_MINUTOS = 30
+SESSAO_VALIDADE_MINUTOS = 30  # após este tempo a sessão expira e é preciso entrar de novo com código por e-mail
+
+def _normalizar_email(email):
+    """Normaliza e-mail para comparação (minúsculo, sem espaços)."""
+    if not email or not isinstance(email, str):
+        return ""
+    return email.strip().lower()
+
+def _carregar_codigos():
+    """Carrega códigos de login do arquivo."""
+    try:
+        if os.path.exists(CODIGOS_LOGIN_FILE):
+            with open(CODIGOS_LOGIN_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+def _salvar_codigos(data):
+    """Salva códigos de login no arquivo."""
+    try:
+        with open(CODIGOS_LOGIN_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        return True
+    except Exception:
+        return False
+
+def gerar_e_salvar_codigo(email):
+    """Gera código de 6 dígitos, salva com validade de 30 minutos e retorna (codigo, sucesso, mensagem)."""
+    email_norm = _normalizar_email(email)
+    if not email_norm:
+        return None, False, "E-mail inválido."
+    usuario = obter_usuario_por_email(email_norm)
+    if not usuario:
+        return None, False, "E-mail não cadastrado no sistema."
+    codigo = "".join(str(random.randint(0, 9)) for _ in range(6))
+    expires_at = (datetime.now() + timedelta(minutes=CODIGO_VALIDADE_MINUTOS)).isoformat()
+    codigos = _carregar_codigos()
+    codigos[email_norm] = {"code": codigo, "expires_at": expires_at}
+    _salvar_codigos(codigos)
+    return codigo, True, "Código gerado e enviado por e-mail."
+
+def enviar_codigo_por_email(email):
+    """Gera código, salva com validade de 10 min e envia por e-mail. Retorna (sucesso, mensagem)."""
+    codigo, ok, msg = gerar_e_salvar_codigo(email)
+    if not ok:
+        return False, msg
+    assunto = "Código de acesso - Painel SGE"
+    corpo = f"""Olá,
+
+Seu código de acesso ao Painel SGE é: {codigo}
+
+Este código é válido por {CODIGO_VALIDADE_MINUTOS} minutos. Após esse prazo, solicite um novo código.
+
+Se você não solicitou este código, ignore este e-mail.
+
+—
+Superintendência Regional de Educação de Gurupi - TO
+Painel SGE"""
+    sucesso_envio, msg_envio = enviar_email(email, assunto, corpo)
+    if sucesso_envio:
+        return True, "Código enviado para seu e-mail. Verifique a caixa de entrada (e o spam)."
+    return False, f"Código gerado, mas falha ao enviar e-mail: {msg_envio}"
+
+def validar_codigo_login(email, codigo):
+    """Valida e-mail + código. Se válido, retorna dict do usuário e invalida o código."""
+    email_norm = _normalizar_email(email)
+    if not email_norm or not codigo or not str(codigo).strip():
+        return None
+    codigos = _carregar_codigos()
+    entry = codigos.get(email_norm)
+    if not entry:
+        return None
+    if entry.get("code") != str(codigo).strip():
+        return None
+    try:
+        expires_at = datetime.fromisoformat(entry["expires_at"])
+        if datetime.now() > expires_at:
+            del codigos[email_norm]
+            _salvar_codigos(codigos)
+            return None
+    except Exception:
+        return None
+    usuario = obter_usuario_por_email(email_norm)
+    if not usuario:
+        return None
+    del codigos[email_norm]
+    _salvar_codigos(codigos)
+    if MONITORING_AVAILABLE:
+        try:
+            client_info = get_client_info()
+            firebase_manager.log_access(
+                usuario=usuario.get("nome", "Usuário"),
+                ip=client_info["ip"],
+                user_agent=client_info["user_agent"],
+            )
+        except Exception as e:
+            print(f"Erro ao registrar acesso: {e}")
+    return usuario
+
+def obter_usuario_por_email(email):
+    """Retorna o dict do usuário da planilha pelo e-mail (coluna EMAIL ou E-MAIL)."""
+    df_usuarios = carregar_usuarios()
+    if df_usuarios is None:
+        return None
+    email_norm = _normalizar_email(email)
+    col_email = None
+    for c in df_usuarios.columns:
+        if str(c).strip().upper() in ("EMAIL", "E-MAIL", "E_MAIL"):
+            col_email = c
+            break
+    if col_email is None:
+        return None
+    for _, row in df_usuarios.iterrows():
+        val = row.get(col_email)
+        if pd.isna(val) or val == "":
+            continue
+        if _normalizar_email(str(val)) == email_norm:
+            cpf_val = row.get("CPF", "")
+            inep_val = row.get("INEP", "")
+            cpf_usuario = re.sub(r"[^0-9]", "", str(cpf_val)) if not pd.isna(cpf_val) and cpf_val != "" else None
+            if inep_val != "" and not pd.isna(inep_val):
+                inep_str = str(int(float(inep_val)))
+                inep_usuario = re.sub(r"[^0-9]", "", inep_str)
+            else:
+                inep_usuario = None
+            return {
+                "nome": row.get("NOME", "Usuário"),
+                "cpf": cpf_usuario,
+                "inep": inep_usuario,
+                "email": email_norm,
+            }
+    return None
+
 def carregar_usuarios():
     """Carrega a planilha de usuários"""
     try:
@@ -237,9 +375,9 @@ def tela_instrucoes():
     
     st.markdown("""
     **2.1 - Faça Login:**
-    - Use seu CPF ou INEP da escola
-    - Digite sua senha
-    - Clique em "Entrar"
+    - Digite seu e-mail cadastrado
+    - Clique em "Solicitar código" e aguarde o e-mail com o código (válido por 30 minutos)
+    - Digite o código recebido e clique em "Entrar"
     
     **2.2 - Carregue a Planilha:**
     - Na tela principal, clique em "Escolher arquivo"
@@ -348,7 +486,7 @@ def tela_instrucoes():
     st.markdown("<div style='text-align: center; padding: 2rem;'><strong style='color: #4a90e2; font-size: 1.1rem;'>© 2025 – desenvolvido por Alexandre Tolentino</strong></div>", unsafe_allow_html=True)
 
 def tela_login():
-    """Exibe tela de login"""
+    """Exibe tela de login por e-mail com código enviado por e-mail (válido por 30 min; sessão também dura 30 min)."""
     # CSS para botão de instruções maior
     st.markdown("""
     <style>
@@ -384,37 +522,52 @@ def tela_login():
     
     with col2:
         st.markdown("### Acesso ao Painel SGE")
-        st.info("Aceita CPF (pessoas) ou INEP (escolas)")
+        if st.session_state.get("sessao_expirada"):
+            st.warning("Sua sessão expirou (30 minutos). Solicite um novo código por e-mail para entrar de novo.")
+            st.session_state.sessao_expirada = False
+        st.info("Acesso apenas por e-mail. Solicite um código (válido por 30 min). Após 30 minutos de uso a sessão expira e será preciso solicitar um novo código para entrar de novo.")
         
         with st.form("login_form"):
-            identificador = st.text_input("CPF ou INEP:", placeholder="Digite seu CPF ou INEP da escola", help="Digite apenas números (pontos e traços serão removidos automaticamente)")
-            senha = st.text_input("Senha:", type="password", placeholder="Digite sua senha", help="Digite apenas números (pontos e traços serão removidos automaticamente)")
+            email = st.text_input("E-mail:", placeholder="seu@email.com", type="default", help="E-mail cadastrado no sistema")
+            codigo = st.text_input("Código:", placeholder="Digite o código recebido por e-mail (após solicitar)", help="Código de 6 dígitos enviado ao seu e-mail")
             
-            col_btn1, col_btn2 = st.columns(2)
+            col_btn1, col_btn2, col_btn3 = st.columns(3)
             with col_btn1:
-                login_btn = st.form_submit_button("Entrar", use_container_width=True)
+                solicitar_btn = st.form_submit_button("Solicitar código", use_container_width=True)
             with col_btn2:
+                login_btn = st.form_submit_button("Entrar", use_container_width=True)
+            with col_btn3:
                 if st.form_submit_button("Limpar", use_container_width=True):
                     st.rerun()
         
-        if login_btn:
-            # Limpar identificador e senha (remover pontos, traços, espaços - apenas números)
-            identificador_limpo = re.sub(r'[^0-9]', '', str(identificador))
-            senha_limpa = re.sub(r'[^0-9]', '', str(senha))
-            
-            if not identificador_limpo or not senha_limpa:
-                st.error("Por favor, preencha todos os campos!")
-            elif len(identificador_limpo) < 8:
-                st.error("CPF/INEP inválido! Digite pelo menos 8 números.")
+        if solicitar_btn:
+            email_limpo = _normalizar_email(email)
+            if not email_limpo:
+                st.error("Digite seu e-mail para solicitar o código.")
             else:
-                usuario = autenticar_usuario(identificador_limpo, senha_limpa)
+                ok, msg = enviar_codigo_por_email(email_limpo)
+                if ok:
+                    st.success(msg)
+                else:
+                    st.error(msg)
+        
+        if login_btn:
+            email_limpo = _normalizar_email(email)
+            codigo_limpo = (codigo or "").strip()
+            if not email_limpo:
+                st.error("Digite seu e-mail.")
+            elif not codigo_limpo:
+                st.error("Digite o código recebido por e-mail. Se ainda não recebeu, clique em \"Solicitar código\".")
+            else:
+                usuario = validar_codigo_login(email_limpo, codigo_limpo)
                 if usuario:
                     st.session_state.logado = True
                     st.session_state.usuario = usuario
-                    st.success(f"Login realizado com sucesso!")
+                    st.session_state.login_em = datetime.now()
+                    st.success("Login realizado com sucesso! Sua sessão dura 30 minutos.")
                     st.rerun()
                 else:
-                    st.error("CPF/INEP ou senha incorretos!")
+                    st.error("Código inválido ou expirado. O código vale 30 minutos. Solicite um novo código e tente novamente.")
         
         # Assinatura centralizada
         st.markdown("---")
@@ -678,11 +831,12 @@ def enviar_email(destinatario, assunto, corpo, anexo=None):
         server.quit()
         
         # Salvar log
+        remetente = (st.session_state.get("usuario") or {}).get("nome", "Sistema")
         log_info = {
             "destinatario": destinatario,
             "assunto": assunto,
             "data": datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
-            "remetente": st.session_state.usuario['nome'],
+            "remetente": remetente,
             "status": "Enviado (Real)"
         }
         
@@ -704,11 +858,12 @@ def enviar_email_simulado(destinatario, assunto, corpo, anexo=None):
         time.sleep(1)  # Simular processamento
         
         # Salvar informações do "envio" em um arquivo de log
+        remetente = (st.session_state.get("usuario") or {}).get("nome", "Sistema")
         log_info = {
             "destinatario": destinatario,
             "assunto": assunto,
             "data": datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
-            "remetente": st.session_state.usuario['nome'],
+            "remetente": remetente,
             "status": "Enviado (Simulado)"
         }
         
@@ -1902,6 +2057,8 @@ if 'logado' not in st.session_state:
     st.session_state.logado = False
 if 'usuario' not in st.session_state:
     st.session_state.usuario = None
+if 'login_em' not in st.session_state:
+    st.session_state.login_em = None
 if 'mostrar_alterar_senha' not in st.session_state:
     st.session_state.mostrar_alterar_senha = False
 if 'mostrar_instrucoes' not in st.session_state:
@@ -1927,10 +2084,22 @@ if not st.session_state.logado:
     tela_login()
     st.stop()
 
-# Verificar se deve mostrar tela de alterar senha
+# Verificar se a sessão expirou (30 minutos)
+if st.session_state.logado and st.session_state.login_em:
+    try:
+        limite = st.session_state.login_em + timedelta(minutes=SESSAO_VALIDADE_MINUTOS)
+        if datetime.now() > limite:
+            st.session_state.logado = False
+            st.session_state.usuario = None
+            st.session_state.login_em = None
+            st.session_state.sessao_expirada = True
+            st.rerun()
+    except Exception:
+        st.session_state.login_em = None
+
+# Alterar senha desativado: acesso é apenas por código por e-mail
 if st.session_state.mostrar_alterar_senha:
-    tela_alterar_senha()
-    st.stop()
+    st.session_state.mostrar_alterar_senha = False
 
 # Verificar se deve mostrar modal sobre
 if st.session_state.mostrar_sobre:
@@ -1981,13 +2150,12 @@ st.markdown(f"""
 col_nav1, col_nav2, col_nav3, col_nav4, col_nav5 = st.columns([2, 1, 1, 1, 1])
 
 with col_nav2:
-    if st.button("🔑 Alterar Senha", use_container_width=True, key="btn_alterar_senha"):
-        st.session_state.mostrar_alterar_senha = True
+    if st.button("ℹ️ Sobre", use_container_width=True, key="btn_sobre"):
+        st.session_state.mostrar_sobre = True
         st.rerun()
 
 with col_nav3:
-    if st.button("ℹ️ Sobre", use_container_width=True, key="btn_sobre"):
-        st.session_state.mostrar_sobre = True
+    pass  # reservado
 
 with col_nav4:
     if MONITORING_AVAILABLE and st.button("🔐 Admin", use_container_width=True, key="btn_admin"):
@@ -2010,6 +2178,7 @@ with col_nav5:
         
         st.session_state.logado = False
         st.session_state.usuario = None
+        st.session_state.login_em = None
         st.rerun()
 
 st.markdown("---")
