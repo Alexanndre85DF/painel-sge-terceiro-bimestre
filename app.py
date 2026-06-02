@@ -2077,9 +2077,9 @@ def calcula_indicadores(df):
         classificar_status_b1_b2_b3(_n1, _n2, _n3, _m123) if pd.notna(_n3) 
         else "Incompleto"  # Se falta N3, é incompleto
         for _n1, _n2, _n3, _m123, _m12 in zip(
-            pivot.get("N1", np.nan), 
-            pivot.get("N2", np.nan), 
-            pivot.get("N3", np.nan),
+            n1,
+            n2,
+            n3,
             pivot["Media123"],
             pivot["Media12"]
         )
