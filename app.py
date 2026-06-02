@@ -2978,57 +2978,181 @@ else:
     expander_title = "Análise Detalhada de Frequência"
 
 with st.expander(expander_title):
-    if "Frequencia Anual" in df_filt.columns or "Frequencia" in df_filt.columns:
-        # Tabela de frequência por aluno e turma (agrupando por aluno e turma para mostrar turmas)
-        if "Frequencia Anual" in df_filt.columns:
-            freq_detalhada = df_filt.groupby([coluna_aluno, "Turma"])["Frequencia Anual"].last().reset_index()
-            freq_detalhada = freq_detalhada.rename(columns={"Frequencia Anual": "Frequencia"})
-        else:
-            freq_detalhada = df_filt.groupby([coluna_aluno, "Turma"])["Frequencia"].last().reset_index()
-        freq_detalhada["Classificacao_Freq"] = freq_detalhada["Frequencia"].apply(classificar_frequencia)
-        freq_detalhada = freq_detalhada.sort_values(coluna_aluno)
-        
-        # Função para colorir frequência
+    if not ("Frequencia Anual" in df_filt.columns or "Frequencia" in df_filt.columns):
+        st.info("Dados de frequência não disponíveis na planilha.")
+    else:
+        # Função para colorir classificação
         def color_frequencia(val):
             if val == "Reprovado":
-                return "background-color: #f8d7da; color: #721c24"  # Vermelho
-            elif val == "Alto Risco":
-                return "background-color: #f5c6cb; color: #721c24"  # Vermelho claro
-            elif val == "Risco Moderado":
-                return "background-color: #fff3cd; color: #856404"  # Amarelo
-            elif val == "Ponto de Atenção":
-                return "background-color: #ffeaa7; color: #856404"  # Amarelo claro
-            elif val == "Meta Favorável":
-                return "background-color: #d4edda; color: #155724"  # Verde
+                return "background-color: #f8d7da; color: #721c24"
+            if val == "Alto Risco":
+                return "background-color: #f5c6cb; color: #721c24"
+            if val == "Risco Moderado":
+                return "background-color: #fff3cd; color: #856404"
+            if val == "Ponto de Atenção":
+                return "background-color: #ffeaa7; color: #856404"
+            if val == "Meta Favorável":
+                return "background-color: #d4edda; color: #155724"
+            return "background-color: #e2e3e5; color: #383d41"
+
+        def _faltas_por_periodo(df_base, periodo_chave):
+            if "Falta" not in df_base.columns or "Periodo" not in df_base.columns:
+                return None
+            base = df_base[df_base["Periodo"].str.contains(periodo_chave, case=False, na=False)]
+            if base.empty:
+                return None
+            return (
+                base.groupby([coluna_aluno, "Turma"])["Falta"]
+                .sum()
+                .reset_index()
+                .rename(columns={"Falta": f"Faltas_{periodo_chave}_Bimestre"})
+            )
+
+        def _render_tabela_frequencia(freq_df, faltas_dfs, titulo, subtitulo, export_key, export_filename, nota_rodape=None):
+            st.markdown(f"### {titulo}")
+            if subtitulo:
+                st.caption(subtitulo)
+
+            if freq_df is None or freq_df.empty:
+                st.info("Nenhum registro de frequência para os filtros atuais.")
+                return
+
+            tabela = freq_df.copy()
+            tabela["Classificacao_Freq"] = tabela["Frequencia"].apply(classificar_frequencia)
+            tabela["Frequencia_Formatada"] = tabela["Frequencia"].apply(lambda x: f"{x:.1f}%" if pd.notna(x) else "N/A")
+
+            # Merge das faltas (quando disponíveis)
+            for df_faltas in faltas_dfs:
+                if df_faltas is not None and not df_faltas.empty:
+                    tabela = tabela.merge(df_faltas, on=[coluna_aluno, "Turma"], how="left")
+
+            # Totais acumulados (se as colunas existirem)
+            if "Faltas_Primeiro_Bimestre" in tabela.columns and "Faltas_Segundo_Bimestre" in tabela.columns:
+                tabela["Faltas_Total_1e2_Bim"] = (
+                    tabela["Faltas_Primeiro_Bimestre"].fillna(0) + tabela["Faltas_Segundo_Bimestre"].fillna(0)
+                ).astype(int)
+            if (
+                "Faltas_Primeiro_Bimestre" in tabela.columns
+                and "Faltas_Segundo_Bimestre" in tabela.columns
+                and "Faltas_Terceiro_Bimestre" in tabela.columns
+            ):
+                tabela["Faltas_Total_1e2e3_Bim"] = (
+                    tabela["Faltas_Primeiro_Bimestre"].fillna(0)
+                    + tabela["Faltas_Segundo_Bimestre"].fillna(0)
+                    + tabela["Faltas_Terceiro_Bimestre"].fillna(0)
+                ).astype(int)
+
+            # Ordenar da menor para maior frequência (como nos prints)
+            tabela = tabela.sort_values(["Frequencia", coluna_aluno], ascending=[True, True]).reset_index(drop=True)
+
+            # Colunas visíveis
+            cols = [coluna_aluno, "Turma", "Frequencia_Formatada", "Classificacao_Freq"]
+            cols_faltas = [c for c in tabela.columns if c.startswith("Faltas_")]
+            cols = cols + cols_faltas
+
+            tbl = tabela[cols].copy()
+            styled = _styler_map_cells(tbl, color_frequencia, ["Classificacao_Freq"]) if not tbl.empty else tbl
+            st.dataframe(styled, use_container_width=True)
+
+            col_export_a, col_export_b = st.columns([1, 4])
+            with col_export_a:
+                if st.button("📊 Exportar", key=export_key):
+                    excel_data = criar_excel_formatado(tabela[cols], "Frequencia_Detalhada")
+                    st.download_button(
+                        label="Baixar Excel",
+                        data=excel_data,
+                        file_name=export_filename,
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )
+
+            if nota_rodape:
+                st.caption(nota_rodape)
+
+        # Abas: anual e por bimestre
+        tab_anual, tab_b1, tab_b2, tab_b3 = st.tabs(["Anual", "1º Bimestre", "2º Bimestre", "3º Bimestre"])
+
+        # Pré-cálculo de faltas (para reaproveitar nas abas)
+        faltas_b1 = _faltas_por_periodo(df_filt, "Primeiro")
+        faltas_b2 = _faltas_por_periodo(df_filt, "Segundo")
+        faltas_b3 = _faltas_por_periodo(df_filt, "Terceiro")
+
+        with tab_anual:
+            if "Frequencia Anual" not in df_filt.columns:
+                st.info("A planilha não tem a coluna 'Frequência Anual'.")
             else:
-                return "background-color: #e2e3e5; color: #383d41"  # Cinza
-        
-        # Formatar frequência
-        freq_detalhada["Frequencia_Formatada"] = freq_detalhada["Frequencia"].apply(
-            lambda x: f"{x:.1f}%" if pd.notna(x) else "N/A"
-        )
-        
-        # Aplicar cores (compatível com pandas 2.1+ Styler.map e DataFrames vazios)
-        cols_freq_tbl = [coluna_aluno, "Turma", "Frequencia_Formatada", "Classificacao_Freq"]
-        tbl_freq = freq_detalhada[cols_freq_tbl].copy()
-        if tbl_freq.empty:
-            st.info("Nenhum registro de frequência para os filtros atuais.")
-        else:
-            styled_freq = _styler_map_cells(tbl_freq, color_frequencia, ["Classificacao_Freq"])
-            st.dataframe(styled_freq, use_container_width=True)
-        
-        # Botão de exportação para frequência
-        col_export5, col_export6 = st.columns([1, 4])
-        with col_export5:
-            if st.button("📊 Exportar Frequência", key="export_frequencia", help="Baixar planilha com análise de frequência"):
-                excel_data = criar_excel_formatado(freq_detalhada[[coluna_aluno, "Turma", "Frequencia_Formatada", "Classificacao_Freq"]], "Analise_Frequencia")
-                st.download_button(
-                    label="Baixar Excel",
-                    data=excel_data,
-                    file_name="analise_frequencia.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                freq_anual = df_filt.groupby([coluna_aluno, "Turma"])["Frequencia Anual"].last().reset_index()
+                freq_anual = freq_anual.rename(columns={"Frequencia Anual": "Frequencia"})
+                _render_tabela_frequencia(
+                    freq_anual,
+                    [faltas_b1, faltas_b2, faltas_b3],
+                    "Frequência anual (consolidada)",
+                    "Coluna Frequência Anual da planilha. Ordenado da menor para a maior %.",
+                    "export_freq_anual",
+                    "frequencia_anual_detalhada.xlsx",
+                    "Faltas: soma da coluna Falta no 1º/2º/3º bimestre e totais acumulados (1e2 e 1e2e3).",
                 )
-        
+
+        with tab_b1:
+            freq_b1 = frequencia_media_alunos_bimestre(df_filt, coluna_aluno, "Primeiro")
+            if freq_b1 is not None and not freq_b1.empty:
+                # juntar turma (bimestre tem várias linhas por turma; usamos a(s) turma(s) existente(s) no df_filt)
+                turmas = (
+                    df_filt[df_filt["Periodo"].str.contains("Primeiro", case=False, na=False)]
+                    .groupby([coluna_aluno, "Turma"])
+                    .size()
+                    .reset_index()[[coluna_aluno, "Turma"]]
+                )
+                freq_b1 = turmas.merge(freq_b1, on=coluna_aluno, how="left")
+            _render_tabela_frequencia(
+                freq_b1,
+                [faltas_b1],
+                "Frequência — 1º Bimestre",
+                "Média da coluna Frequência por aluno em todas as disciplinas do 1º Bimestre. Ordenado da menor para a maior %.",
+                "export_freq_b1",
+                "frequencia_1bimestre_detalhada.xlsx",
+                "Faltas_1_Bimestre: soma de faltas em todas as disciplinas apenas no 1º Bimestre.",
+            )
+
+        with tab_b2:
+            freq_b2 = frequencia_media_alunos_bimestre(df_filt, coluna_aluno, "Segundo")
+            if freq_b2 is not None and not freq_b2.empty:
+                turmas = (
+                    df_filt[df_filt["Periodo"].str.contains("Segundo", case=False, na=False)]
+                    .groupby([coluna_aluno, "Turma"])
+                    .size()
+                    .reset_index()[[coluna_aluno, "Turma"]]
+                )
+                freq_b2 = turmas.merge(freq_b2, on=coluna_aluno, how="left")
+            _render_tabela_frequencia(
+                freq_b2,
+                [faltas_b2],
+                "Frequência — 2º Bimestre",
+                "Média da coluna Frequência por aluno em todas as disciplinas do 2º Bimestre. Ordenado da menor para a maior %.",
+                "export_freq_b2",
+                "frequencia_2bimestre_detalhada.xlsx",
+                "Faltas_2_Bimestre: soma de faltas em todas as disciplinas apenas no 2º Bimestre.",
+            )
+
+        with tab_b3:
+            freq_b3 = frequencia_media_alunos_bimestre(df_filt, coluna_aluno, "Terceiro")
+            if freq_b3 is not None and not freq_b3.empty:
+                turmas = (
+                    df_filt[df_filt["Periodo"].str.contains("Terceiro", case=False, na=False)]
+                    .groupby([coluna_aluno, "Turma"])
+                    .size()
+                    .reset_index()[[coluna_aluno, "Turma"]]
+                )
+                freq_b3 = turmas.merge(freq_b3, on=coluna_aluno, how="left")
+            _render_tabela_frequencia(
+                freq_b3,
+                [faltas_b3],
+                "Frequência — 3º Bimestre",
+                "Média da coluna Frequência por aluno em todas as disciplinas do 3º Bimestre. Ordenado da menor para a maior %.",
+                "export_freq_b3",
+                "frequencia_3bimestre_detalhada.xlsx",
+                "Faltas_3_Bimestre: soma de faltas em todas as disciplinas apenas no 3º Bimestre.",
+            )
+
         # Legenda de frequência
         st.markdown("###  Legenda de Frequência")
         col_leg1, col_leg2, col_leg3 = st.columns(3)
@@ -3047,8 +3171,6 @@ with st.expander(expander_title):
             **≥ 95%**: Meta favorável  
             **Sem dados**: Frequência não informada
             """)
-    else:
-        st.info("Dados de frequência não disponíveis na planilha.")
 
 
 st.markdown("---")
