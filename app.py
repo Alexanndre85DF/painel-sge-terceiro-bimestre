@@ -2053,6 +2053,11 @@ def calcula_indicadores(df):
         n2 = pd.Series([np.nan] * len(pivot))
     if isinstance(n3, float):
         n3 = pd.Series([np.nan] * len(pivot))
+
+    # Garantir que as colunas existam no pivot (evita KeyError em filtros/relatórios)
+    pivot["N1"] = n1
+    pivot["N2"] = n2
+    pivot["N3"] = n3
     
     # Calcular métricas dos 3 primeiros bimestres
     pivot["Soma123"] = n1.fillna(0) + n2.fillna(0) + n3.fillna(0)
