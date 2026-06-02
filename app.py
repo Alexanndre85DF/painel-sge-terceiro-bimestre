@@ -3669,35 +3669,10 @@ with col_bim3:
     </div>
     """, unsafe_allow_html=True)
 
-# Destaque: 10 melhores alunos (1º e 2º bimestres)
+# Destaque: 10 melhores alunos (1º, 2º e 3º bimestres)
 st.markdown("""
 <div style="background: linear-gradient(135deg, #047857, #10b981); border-radius: 12px; padding: 22px; margin: 24px 0 16px 0; box-shadow: 0 4px 15px rgba(4, 120, 87, 0.25);">
     <h2 style="color: white; text-align: center; margin: 0; font-size: 1.65em; font-weight: 700; text-shadow: 0 1px 3px rgba(0,0,0,0.25);">🏆 Destaque: 10 melhores alunos</h2>
-    <p style="color: rgba(255,255,255,0.95); text-align: center; margin: 10px 0 0 0; font-size: 1.05em; font-weight: 500;">Maior média geral entre as disciplinas (1º e 2º bimestres)</p>
-</div>
-""", unsafe_allow_html=True)
-
-if len(indic) > 0 and "Media12" in indic.columns:
-    _ok_top12 = montar_top10_melhores_alunos(
-        indic,
-        coluna_aluno,
-        "Media12",
-        [("N1", "Média N1"), ("N2", "Média N2")],
-        "export_top10_alunos_b12",
-        "top10_melhores_alunos_1e2bim.xlsx",
-    )
-    if _ok_top12:
-        st.caption(
-            "A **média geral** é a média aritmética da coluna **Média 1º+2º bim.** (Média12) entre todas as disciplinas do aluno na turma. "
-            "Em empate na última posição, a ordem segue a da planilha."
-        )
-else:
-    st.info("Indicadores de notas indisponíveis para exibir o ranking (1º e 2º bimestres).")
-
-# Destaque: 10 melhores alunos (1º, 2º e 3º bimestres)
-st.markdown("""
-<div style="background: linear-gradient(135deg, #065f46, #059669); border-radius: 12px; padding: 22px; margin: 24px 0 16px 0; box-shadow: 0 4px 15px rgba(5, 150, 105, 0.25);">
-    <h2 style="color: white; text-align: center; margin: 0; font-size: 1.65em; font-weight: 700; text-shadow: 0 1px 3px rgba(0,0,0,0.25);">🏆 Destaque: 10 melhores alunos (3 bimestres)</h2>
     <p style="color: rgba(255,255,255,0.95); text-align: center; margin: 10px 0 0 0; font-size: 1.05em; font-weight: 500;">Maior média geral entre as disciplinas (1º, 2º e 3º bimestres)</p>
 </div>
 """, unsafe_allow_html=True)
@@ -3709,7 +3684,7 @@ if len(indic) > 0 and "Media123" in indic.columns:
         "Media123",
         [("N1", "Média N1"), ("N2", "Média N2"), ("N3", "Média N3")],
         "export_top10_alunos_b123",
-        "top10_melhores_alunos_1e2e3bim.xlsx",
+        "top10_melhores_alunos_3bim.xlsx",
     )
     if _ok_top123:
         st.caption(
