@@ -2025,6 +2025,32 @@ def classificar_frequencia_faixa(freq):
         return "Ponto de Atenção"
     return "Meta Favorável"
 
+FAIXAS_FREQUENCIA_ORDEM = [
+    "Reprovado",
+    "Alto Risco",
+    "Risco Moderado",
+    "Ponto de Atenção",
+    "Meta Favorável",
+]
+
+CORES_FAIXAS_FREQUENCIA = {
+    "Reprovado": "#dc2626",
+    "Alto Risco": "#ea580c",
+    "Risco Moderado": "#d97706",
+    "Ponto de Atenção": "#f59e0b",
+    "Meta Favorável": "#16a34a",
+}
+
+def dataframe_frequencia_todas_faixas(contagem_freq):
+    """Monta tabela do gráfico com todas as faixas (0 quando não houver alunos)."""
+    linhas = []
+    for categoria in FAIXAS_FREQUENCIA_ORDEM:
+        linhas.append({
+            "Categoria": categoria,
+            "Quantidade": int(contagem_freq.get(categoria, 0)),
+        })
+    return pd.DataFrame(linhas)
+
 def frequencia_alunos_anual(df, coluna_aluno):
     """Uma linha por aluno com Frequência Anual consolidada."""
     if "Frequencia Anual" not in df.columns or not coluna_aluno:
@@ -2149,7 +2175,11 @@ def montar_top10_melhores_alunos(indic_df, coluna_aluno, col_media_geral, medias
     medias_aluno = indic_df.groupby([coluna_aluno, "Turma"], as_index=False).agg(**agg_spec)
     medias_aluno = medias_aluno.dropna(subset=["Media_Geral"])
     if medias_aluno.empty:
-        st.info("Não há médias válidas para montar o ranking de alunos.")
+        st.info(
+            "Não há médias válidas para montar o ranking. Isso pode ocorrer se **não houver notas** "
+            "nos bimestres filtrados. Quando falta o 3º bimestre, a média geral usa apenas os "
+            "bimestres com nota (1º e/ou 2º); confira se a planilha e os filtros incluem esses períodos."
+        )
         return False
 
     top10 = (
@@ -2257,12 +2287,12 @@ def calcula_indicadores(df):
     
     # Calcular métricas dos 3 primeiros bimestres
     pivot["Soma123"] = n1.fillna(0) + n2.fillna(0) + n3.fillna(0)
-    # Média dos 3 bimestres (se algum for NaN, considerar apenas os disponíveis)
-    pivot["Media123"] = (n1 + n2 + n3) / 3
+    # Média dos bimestres com nota (ignora NaN — ex.: sem 3º bimestre usa só 1º e 2º)
+    pivot["Media123"] = pd.concat([n1, n2, n3], axis=1).mean(axis=1, skipna=True)
     
     # Manter também as métricas antigas para compatibilidade
     pivot["Soma12"] = n1.fillna(0) + n2.fillna(0)
-    pivot["Media12"] = (n1 + n2) / 2
+    pivot["Media12"] = pd.concat([n1, n2], axis=1).mean(axis=1, skipna=True)
 
     # Quanto precisa no próximo bimestre (N4) para fechar soma >= 24
     pivot["PrecisaSomarProx1"] = SOMA_FINAL_ALVO - pivot["Soma123"]
@@ -3688,9 +3718,9 @@ if len(indic) > 0 and "Media123" in indic.columns:
     )
     if _ok_top123:
         st.caption(
-            "A **média geral** é a média aritmética da coluna **Média 1º+2º+3º bim.** (Média123) entre todas as disciplinas do aluno na turma. "
-            "As colunas **Média N1**, **Média N2** e **Média N3** são a média das notas de cada bimestre entre as disciplinas. "
-            "Em empate na última posição, a ordem segue a da planilha."
+            "A **média geral** é a média da coluna **Média 1º+2º+3º bim.** (Média123) entre todas as disciplinas do aluno na turma. "
+            "Se não houver nota no 3º bimestre, entra na média só o 1º e o 2º (e o mesmo vale para bimestres faltantes). "
+            "**Média N1**, **N2** e **N3**: média por bimestre entre as disciplinas. Em empate, a ordem segue a da planilha."
         )
 else:
     st.info("Indicadores de notas indisponíveis para exibir o ranking (1º, 2º e 3º bimestres).")
@@ -4219,35 +4249,33 @@ with col_graf2:
             
             freq_geral["Classificacao_Freq"] = freq_geral["Frequencia"].apply(classificar_frequencia_faixa)
             contagem_freq_geral = freq_geral["Classificacao_Freq"].value_counts()
-            
-            # Preparar dados para o gráfico
-            dados_grafico = []
-            cores = {
-                "Reprovado": "#dc2626",
-                "Alto Risco": "#ea580c", 
-                "Risco Moderado": "#d97706",
-                "Ponto de Atenção": "#f59e0b",
-                "Meta Favorável": "#16a34a"
-            }
-            
-            for categoria, quantidade in contagem_freq_geral.items():
-                if categoria != "Sem dados":  # Excluir "Sem dados" do gráfico
-                    dados_grafico.append({
-                        "Categoria": categoria,
-                        "Quantidade": quantidade,
-                        "Cor": cores.get(categoria, "#6b7280")
-                    })
-            
-            if dados_grafico:
-                df_grafico = pd.DataFrame(dados_grafico)
-                
-                # Criar gráfico de barras
-                fig_freq = px.bar(df_grafico, x="Categoria", y="Quantidade", 
-                                 title="Distribuição de Alunos por Faixa de Frequência",
-                                 color="Categoria", 
-                                 color_discrete_map=cores)
-                fig_freq.update_layout(xaxis_title=None, yaxis_title="Número de Alunos", 
-                                     bargap=0.25, showlegend=False, xaxis_tickangle=45)
+
+            # Gráfico com todas as faixas (inclui 0 para faixas sem alunos)
+            df_grafico = dataframe_frequencia_todas_faixas(contagem_freq_geral)
+            total_faixas = int(df_grafico["Quantidade"].sum())
+
+            if total_faixas > 0:
+                fig_freq = px.bar(
+                    df_grafico,
+                    x="Categoria",
+                    y="Quantidade",
+                    title="Distribuição de Alunos por Faixa de Frequência (alunos únicos)",
+                    color="Categoria",
+                    color_discrete_map=CORES_FAIXAS_FREQUENCIA,
+                    text="Quantidade",
+                )
+                fig_freq.update_traces(textposition="outside", texttemplate="%{y}")
+                fig_freq.update_layout(
+                    xaxis_title=None,
+                    yaxis_title="Número de Alunos",
+                    bargap=0.25,
+                    showlegend=False,
+                    xaxis_tickangle=45,
+                    xaxis=dict(
+                        categoryorder="array",
+                        categoryarray=FAIXAS_FREQUENCIA_ORDEM,
+                    ),
+                )
                 st.plotly_chart(fig_freq, use_container_width=True)
                 
                 # Botão de exportação para dados do gráfico de frequência
@@ -4469,25 +4497,18 @@ with col_export_all1:
             # Aba 5: Frequência por Faixas (se disponível)
             if "Frequencia Anual" in df_filt.columns or "Frequencia" in df_filt.columns:
                 if "Frequencia Anual" in df_filt.columns:
-                    freq_geral = df_filt.groupby([coluna_aluno, "Turma"])["Frequencia Anual"].last().reset_index()
+                    freq_geral = df_filt.groupby(coluna_aluno)["Frequencia Anual"].last().reset_index()
                     freq_geral = freq_geral.rename(columns={"Frequencia Anual": "Frequencia"})
                 else:
-                    freq_geral = df_filt.groupby([coluna_aluno, "Turma"])["Frequencia"].last().reset_index()
+                    freq_geral = df_filt.groupby(coluna_aluno)["Frequencia"].last().reset_index()
                 
                 freq_geral["Classificacao_Freq"] = freq_geral["Frequencia"].apply(classificar_frequencia_faixa)
                 contagem_freq_geral = freq_geral["Classificacao_Freq"].value_counts()
-                
-                dados_grafico = []
-                for categoria, quantidade in contagem_freq_geral.items():
-                    if categoria != "Sem dados":
-                        dados_grafico.append({
-                            "Categoria": categoria,
-                            "Numero_Alunos": quantidade
-                        })
-                
-                if dados_grafico:
-                    df_grafico = pd.DataFrame(dados_grafico)
-                    df_grafico.to_excel(writer, sheet_name="Frequencia_Por_Faixa", index=False)
+                df_grafico_exp = dataframe_frequencia_todas_faixas(contagem_freq_geral).rename(
+                    columns={"Quantidade": "Numero_Alunos"}
+                )
+                if df_grafico_exp["Numero_Alunos"].sum() > 0:
+                    df_grafico_exp.to_excel(writer, sheet_name="Frequencia_Por_Faixa", index=False)
             
             # Aba 6: Cruzamento Notas x Frequência (alunos únicos)
             if ("Frequencia Anual" in df_filt.columns or "Frequencia" in df_filt.columns) and len(indic) > 0:
